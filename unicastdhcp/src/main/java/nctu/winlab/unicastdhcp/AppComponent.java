@@ -15,9 +15,16 @@
  */
 package nctu.winlab.unicastdhcp;
 
-import org.onosproject.cfg.ComponentConfigService;
+import static org.onosproject.net.config.NetworkConfigEvent.Type.CONFIG_ADDED;
+import static org.onosproject.net.config.NetworkConfigEvent.Type.CONFIG_UPDATED;
+import static org.onosproject.net.config.basics.SubjectFactories.APP_SUBJECT_FACTORY;
+
 import org.onosproject.core.CoreService;
 import org.onosproject.core.ApplicationId;
+import org.onosproject.net.config.NetworkConfigEvent;
+import org.onosproject.net.config.NetworkConfigListener;
+import org.onosproject.net.config.ConfigFactory;
+import org.onosproject.net.config.NetworkConfigRegistry;
 import org.osgi.service.component.annotations.Activate;
 import org.osgi.service.component.annotations.Component;
 import org.osgi.service.component.annotations.Deactivate;
@@ -35,28 +42,53 @@ import org.slf4j.LoggerFactory;
 public class AppComponent {
 
     private final Logger log = LoggerFactory.getLogger("Unicast DHCP");
+    private final DhcpConfigListener cfgListener = new DhcpConfigListener();
+    private final ConfigFactory<ApplicationId, DhcpConfig> factory = new ConfigFactory<ApplicationId, DhcpConfig>(
+        APP_SUBJECT_FACTORY, DhcpConfig.class, "UnicastDhcpConfig") {
+      @Override
+      public DhcpConfig createConfig() {
+        return new DhcpConfig();
+      }
+    };
 
     /* For registering the application */
     @Reference(cardinality = ReferenceCardinality.MANDATORY)
     protected CoreService coreService;
-    
+
+
     @Reference(cardinality = ReferenceCardinality.MANDATORY)
-    protected ComponentConfigService cfgService;
+    protected NetworkConfigRegistry netCfgService;
 
     /* Variables */
     private ApplicationId appId;
 
     @Activate
     protected void activate() {
-        cfgService.registerProperties(getClass());
         appId = coreService.registerApplication("nctu.winlab.unicastdhcp");
+        netCfgService.addListener(cfgListener);
+        netCfgService.registerConfigFactory(factory);
         log.info("Started {}", appId.id());
     }
 
     @Deactivate
     protected void deactivate() {
-        cfgService.unregisterProperties(getClass(), false);
+        netCfgService.removeListener(cfgListener);
+        netCfgService.unregisterConfigFactory(factory);
         log.info("Stopped");
     }
 
+
+    private class DhcpConfigListener implements NetworkConfigListener {
+        @Override
+        public void event(NetworkConfigEvent event) {
+            if ((event.type() == CONFIG_ADDED || event.type() == CONFIG_UPDATED) &&
+                 event.configClass().equals(DhcpConfig.class)) {
+                DhcpConfig config = netCfgService.getConfig(appId, DhcpConfig.class);
+
+                if (config != null) {
+                    log.info("DHCP Server location is {}", config.getServerLocation());
+                }
+            }
+        }
+    }
 }
