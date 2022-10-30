@@ -36,21 +36,16 @@ import org.onosproject.net.intent.Key;
 import org.onosproject.net.config.NetworkConfigEvent;
 import org.onosproject.net.config.NetworkConfigListener;
 import org.onosproject.net.ConnectPoint;
-import org.onosproject.net.DeviceId;
+import org.onosproject.net.ElementId;
 import org.onosproject.net.Link;
 import org.onosproject.net.FilteredConnectPoint;
-// import org.onosproject.net.PortNumber;
 import org.onosproject.net.config.ConfigFactory;
 import org.onosproject.net.config.NetworkConfigRegistry;
 import org.onosproject.net.Path;
 import org.onosproject.net.Host;
-// import org.onosproject.net.HostId;
 import org.onosproject.net.flow.DefaultTrafficSelector;
 import org.onosproject.net.flow.DefaultTrafficTreatment;
 import org.onosproject.net.flow.TrafficSelector;
-import org.onosproject.net.flow.TrafficTreatment;
-// import org.onosproject.net.flow.TrafficTreatment;
-// import org.onosproject.net.packet.InboundPacket;
 import org.onosproject.net.packet.PacketContext;
 import org.onosproject.net.packet.PacketPriority;
 import org.onosproject.net.packet.PacketProcessor;
@@ -63,7 +58,6 @@ import org.osgi.service.component.annotations.ReferenceCardinality;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.onosproject.net.packet.InboundPacket;
-import org.onosproject.net.topology.Topology;
 import org.onosproject.net.topology.TopologyService;
 import org.onosproject.net.topology.PathService;
 import org.onosproject.net.host.HostService;
@@ -180,9 +174,9 @@ public class AppComponent {
         }
     }
 
-    private Key getKey(ConnectPoint src, ConnectPoint dst) {
-        String src_id_str = src.deviceId().toString();
-        String dst_id_str = dst.deviceId().toString();
+    private Key getKey(ElementId src, ElementId dst) {
+        String src_id_str = src.toString();
+        String dst_id_str = dst.toString();
         Key key;
 
         if (src_id_str.compareTo(dst_id_str) < 0) {
@@ -193,11 +187,16 @@ public class AppComponent {
 
         return key;
     }
-    
+
     /* Send out the packet from the specified port */
     private void packetout(PacketContext context, PortNumber portNumber) {
         context.treatmentBuilder().setOutput(portNumber);
         context.send();
+    }
+
+    /* Broadcast the packet */
+    private void flood(PacketContext context) {
+        packetout(context, PortNumber.FLOOD);
     }
 
     /* Handle the packets coming from switchs */
@@ -209,15 +208,24 @@ public class AppComponent {
             }
 
             InboundPacket pkt = context.inPacket();
-            Ethernet ethPacket = pkt.parsed();  log.info("eth: {}", ethPacket);
+            Ethernet ethPacket = pkt.parsed();  //log.info("eth: {}", ethPacket);
             ConnectPoint src_cp = pkt.receivedFrom();
+
+            PortNumber output_port = null;
+
+            if (ethPacket.getEtherType() == Ethernet.TYPE_ARP) {
+                flood(context);
+                return;
+            }
 
             if (ethPacket.isBroadcast()) {
                 /* Client to Server */
-                Key key = getKey(src_cp, dhcp_server_cp);
+                Host src_host = hostService.getHostsByMac(ethPacket.getSourceMAC()).iterator().next();
+                Key key = getKey(src_host.id(), dhcp_server_cp.deviceId());
                 PointToPointIntent p2p_intent = (PointToPointIntent) intentService.getIntent(key);
-
-                log.info("Get intent: {}", p2p_intent);
+                Set<Path> paths = null;
+                Iterator<Path> paths_iter = null;
+                List<Link> links = null;
 
                 if (p2p_intent == null) {
                     /* No intent, Create an intent and sumbit it */
@@ -225,24 +233,24 @@ public class AppComponent {
                     PointToPointIntent.Builder p2p_intent_builder = PointToPointIntent.builder();
                     FilteredConnectPoint ingree_point = new FilteredConnectPoint(src_cp);
                     FilteredConnectPoint egree_point = new FilteredConnectPoint(dhcp_server_cp);
-                    Set<Path> paths = pathService.getPaths(src_cp.deviceId(), dhcp_server_cp.deviceId());
 
-                    if (paths.size() == 0) {
-                        log.warn("Paths are empty, waiting for path service to retrieve path information...");
-                        return;
+                    if (src_cp.deviceId().toString().compareTo(dhcp_server_cp.deviceId().toString()) != 0) {
+                        paths = pathService.getPaths(src_cp.deviceId(), dhcp_server_cp.deviceId());
+                        paths_iter = paths.iterator();
+                        links = paths_iter.next().links();  //log.info("Links: {}", links);
+                        output_port = links.get(0).src().port();
+                    } else {
+                        output_port = dhcp_server_cp.port();
                     }
 
-                    Iterator<Path> paths_iter = paths.iterator();
-                    List<Link> links = paths_iter.next().links();
-                    PortNumber output_port = links.get(0).src().port();
-
-                    // log.info("Links: {}", links);
-
+                    // Set up selector
+                    selector_builder.matchEthSrc(ethPacket.getSourceMAC());
                     selector_builder.matchEthType(Ethernet.TYPE_IPV4);
                     selector_builder.matchIPProtocol(IPv4.PROTOCOL_UDP);
                     selector_builder.matchUdpSrc(TpPort.tpPort(UDP.DHCP_CLIENT_PORT));
                     selector_builder.matchUdpDst(TpPort.tpPort(UDP.DHCP_SERVER_PORT));
 
+                    // Set up P2P intent
                     p2p_intent_builder.appId(appId);
                     p2p_intent_builder.key(key);
                     p2p_intent_builder.suggestedPath(links);
@@ -253,34 +261,110 @@ public class AppComponent {
                     p2p_intent_builder.priority(50000);
                     p2p_intent = p2p_intent_builder.build();
 
-                    // log.info("p2p_intent: {}", p2p_intent);
                     log.info("Intent `{}`, port `{}` => `{}`, port `{}` is submitted.",
                         ingree_point.connectPoint().deviceId(),
                         ingree_point.connectPoint().port(),
                         egree_point.connectPoint().deviceId(),
                         egree_point.connectPoint().port());
-
-                    intentService.submit(p2p_intent);
-                    packetout(context, output_port);
                 } else {
                     /* Intent is already exist */
                     FilteredConnectPoint ingree_point = p2p_intent.filteredIngressPoint();
                     FilteredConnectPoint egree_point = p2p_intent.filteredEgressPoint();
 
+                    if (src_cp.deviceId().toString().compareTo(egree_point.connectPoint().deviceId().toString()) != 0) {
+                        paths = pathService.getPaths(src_cp.deviceId(), dhcp_server_cp.deviceId());
+                        paths_iter = paths.iterator();
+                        links = paths_iter.next().links();  //log.info("Links: {}", links);
+                        output_port = links.get(0).src().port();
+                    } else {
+                        output_port = egree_point.connectPoint().port();
+                    }
+
                     log.info("Intent `{}`, port `{}` => `{}`, port `{}` is submitted.",
                         ingree_point.connectPoint().deviceId(),
                         ingree_point.connectPoint().port(),
                         egree_point.connectPoint().deviceId(),
                         egree_point.connectPoint().port());
-
-                    intentService.submit(p2p_intent);
                 }
 
+                intentService.submit(p2p_intent);
             } else {
                 /* Server to Client */
+                Host src_host = hostService.getHostsByMac(ethPacket.getSourceMAC()).iterator().next();
+                Host dst_host = hostService.getHostsByMac(ethPacket.getDestinationMAC()).iterator().next(); //log.info("S2C, host: {}", dst_host);
+                ConnectPoint dst_cp = new ConnectPoint(dst_host.location().elementId(), dst_host.location().port());  //log.info("S2C, dst cp: {}", dst_cp);
+
+                Key key = getKey(src_host.id(), dst_host.id());
+                PointToPointIntent p2p_intent = (PointToPointIntent) intentService.getIntent(key);
+                
+                Set<Path> paths = null;
+                Iterator<Path> paths_iter = null;
+                List<Link> links = null;
+
+                if (p2p_intent == null) {
+                    TrafficSelector.Builder selector_builder = DefaultTrafficSelector.builder();
+                    PointToPointIntent.Builder p2p_intent_builder = PointToPointIntent.builder();
+                    FilteredConnectPoint ingree_point = new FilteredConnectPoint(src_cp);
+                    FilteredConnectPoint egree_point = new FilteredConnectPoint(dst_cp);
+
+
+
+                    if (src_cp.deviceId().toString().compareTo(dst_cp.deviceId().toString()) != 0) {
+                        paths = pathService.getPaths(src_cp.deviceId(), dst_cp.deviceId());
+                        paths_iter = paths.iterator();
+                        links = paths_iter.next().links();  //log.info("Links: {}", links);
+                        output_port = links.get(0).src().port();
+                    } else {
+                        output_port = dst_cp.port();
+                    }
+
+                    // Set up selector
+                    selector_builder.matchEthSrc(ethPacket.getSourceMAC());
+                    selector_builder.matchEthDst(ethPacket.getDestinationMAC());
+                    selector_builder.matchEthType(Ethernet.TYPE_IPV4);
+                    selector_builder.matchIPProtocol(IPv4.PROTOCOL_UDP);
+                    selector_builder.matchUdpSrc(TpPort.tpPort(UDP.DHCP_SERVER_PORT));
+                    selector_builder.matchUdpDst(TpPort.tpPort(UDP.DHCP_CLIENT_PORT));
+
+                    // Set up P2P intent
+                    p2p_intent_builder.appId(appId);
+                    p2p_intent_builder.key(key);
+                    p2p_intent_builder.suggestedPath(links);
+                    p2p_intent_builder.filteredIngressPoint(ingree_point);
+                    p2p_intent_builder.filteredEgressPoint(egree_point);
+                    p2p_intent_builder.selector(selector_builder.build());
+                    p2p_intent_builder.treatment(DefaultTrafficTreatment.emptyTreatment());
+                    p2p_intent_builder.priority(50000);
+                    p2p_intent = p2p_intent_builder.build();
+
+                    log.info("Intent `{}`, port `{}` => `{}`, port `{}` is submitted.",
+                        ingree_point.connectPoint().deviceId(),
+                        ingree_point.connectPoint().port(),
+                        egree_point.connectPoint().deviceId(),
+                        egree_point.connectPoint().port());
+                } else {
+                    /* Intent is already exist */
+                    FilteredConnectPoint ingree_point = p2p_intent.filteredIngressPoint();
+                    FilteredConnectPoint egree_point = p2p_intent.filteredEgressPoint();
+                    
+                    if (src_cp.deviceId().toString().compareTo(egree_point.connectPoint().deviceId().toString()) != 0) {
+                        paths = pathService.getPaths(src_cp.deviceId(), dst_cp.deviceId());
+                        paths_iter = paths.iterator();
+                        links = paths_iter.next().links();  //log.info("Links: {}", links);
+                        output_port = links.get(0).src().port();
+                    } else {
+                        output_port = egree_point.connectPoint().port();
+                    }
+
+                    log.info("Intent `{}`, port `{}` => `{}`, port `{}` is submitted.",
+                        ingree_point.connectPoint().deviceId(),
+                        ingree_point.connectPoint().port(),
+                        egree_point.connectPoint().deviceId(),
+                        egree_point.connectPoint().port());
+                    }
+                intentService.submit(p2p_intent);
             }
-
-
+            packetout(context, output_port);
         }   
     }
 
@@ -292,9 +376,8 @@ public class AppComponent {
                 DhcpConfig config = netCfgService.getConfig(appId, DhcpConfig.class);
 
                 if (config != null) {
-                    String location = config.getServerLocation();
-                    dhcp_server_cp = ConnectPoint.fromString(location);
-                    log.info("DHCP Server location is {}", location);
+                    dhcp_server_cp = ConnectPoint.fromString(config.getServerLocation());
+                    log.info("DHCP server is connected to `{}`, port `{}`", dhcp_server_cp.deviceId(), dhcp_server_cp.port());
 
                 }
             }
