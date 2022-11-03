@@ -25,6 +25,7 @@ import java.util.Iterator;
 
 import org.onlab.packet.Ethernet;
 import org.onlab.packet.IPv4;
+import org.onlab.packet.MacAddress;
 import org.onlab.packet.UDP;
 import org.onlab.packet.TpPort;
 import org.onosproject.core.CoreService;
@@ -171,6 +172,7 @@ public class AppComponent {
         Iterator<Intent> intents_iter = intentService.getIntents().iterator();
 
         while(intents_iter.hasNext()) {
+            intentService.withdraw(intents_iter.next());
             intentService.purge(intents_iter.next());
         }
     }
@@ -188,7 +190,7 @@ public class AppComponent {
         intentService.submit(intent);
     }
 
-    private Key getKey(ElementId src, ElementId dst) {
+    private Key getKey(MacAddress src, MacAddress dst) {
         String src_id_str = src.toString();
         String dst_id_str = dst.toString();
         Key key;
@@ -267,8 +269,7 @@ public class AppComponent {
 
             if (ethPacket.isBroadcast()) {
                 /* Client to Server */
-                HostId src_hostID = HostId.hostId(ethPacket.getSourceMAC());
-                Key key = getKey(src_hostID, dhcp_server_cp.deviceId());
+                Key key = getKey(ethPacket.getSourceMAC(), ethPacket.getDestinationMAC());
                 PointToPointIntent p2p_intent = (PointToPointIntent) intentService.getIntent(key);
                 List<Link> links = null;
 
@@ -299,12 +300,11 @@ public class AppComponent {
                 }
             } else {
                 /* Server to Client */
-                HostId src_hostID = HostId.hostId(ethPacket.getSourceMAC());
                 HostId dst_hostID = HostId.hostId(ethPacket.getDestinationMAC());
                 Host dst_host = hostService.getHost(dst_hostID);
-                ConnectPoint dst_cp = new ConnectPoint(dst_host.location().elementId(), dst_host.location().port());  //log.info("S2C, dst cp: {}", dst_cp);
+                ConnectPoint dst_cp = new ConnectPoint(dst_host.location().elementId(), dst_host.location().port()); 
 
-                Key key = getKey(src_hostID, dst_hostID);
+                Key key = getKey(ethPacket.getSourceMAC(), ethPacket.getDestinationMAC());
                 PointToPointIntent p2p_intent = (PointToPointIntent) intentService.getIntent(key);
                 
                 List<Link> links = null;
