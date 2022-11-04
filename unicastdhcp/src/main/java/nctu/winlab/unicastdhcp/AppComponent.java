@@ -19,9 +19,8 @@ import static org.onosproject.net.config.NetworkConfigEvent.Type.CONFIG_ADDED;
 import static org.onosproject.net.config.NetworkConfigEvent.Type.CONFIG_UPDATED;
 import static org.onosproject.net.config.basics.SubjectFactories.APP_SUBJECT_FACTORY;
 
-import java.util.Set;
-import java.util.List;
 import java.util.Iterator;
+import java.lang.Thread;
 
 import org.onlab.packet.Ethernet;
 import org.onlab.packet.IPv4;
@@ -37,12 +36,9 @@ import org.onosproject.net.intent.Key;
 import org.onosproject.net.config.NetworkConfigEvent;
 import org.onosproject.net.config.NetworkConfigListener;
 import org.onosproject.net.ConnectPoint;
-import org.onosproject.net.ElementId;
-import org.onosproject.net.Link;
 import org.onosproject.net.FilteredConnectPoint;
 import org.onosproject.net.config.ConfigFactory;
 import org.onosproject.net.config.NetworkConfigRegistry;
-import org.onosproject.net.Path;
 import org.onosproject.net.Host;
 import org.onosproject.net.HostId;
 import org.onosproject.net.flow.DefaultTrafficSelector;
@@ -172,10 +168,25 @@ public class AppComponent {
 
     private void cleanIntents() {
         Iterator<Intent> intents_iter = intentService.getIntents().iterator();
+        Intent intnet;
 
         while(intents_iter.hasNext()) {
-            intentService.withdraw(intents_iter.next());
-            intentService.purge(intents_iter.next());
+            intnet = intents_iter.next();
+            
+            intentService.withdraw(intnet);
+        }
+
+        try {
+            Thread.sleep(1000);
+        } catch (Exception e) {
+
+        }
+        
+        intents_iter = intentService.getIntents().iterator();
+        while(intents_iter.hasNext()) {
+            intnet = intents_iter.next();
+            
+            intentService.purge(intnet);
         }
     }
 
