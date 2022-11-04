@@ -48,6 +48,7 @@ import org.onosproject.net.HostId;
 import org.onosproject.net.flow.DefaultTrafficSelector;
 import org.onosproject.net.flow.DefaultTrafficTreatment;
 import org.onosproject.net.flow.TrafficSelector;
+import org.onosproject.net.flow.TrafficTreatment;
 import org.onosproject.net.packet.PacketContext;
 import org.onosproject.net.packet.PacketPriority;
 import org.onosproject.net.packet.PacketProcessor;
@@ -110,6 +111,7 @@ public class AppComponent {
     private ApplicationId appId;
     private MyPacketProcessor processor = new MyPacketProcessor();
     private ConnectPoint dhcp_server_cp;
+    private int S2C = 0, C2S = 1;
 
     @Activate
     protected void activate() {
@@ -204,16 +206,9 @@ public class AppComponent {
         return key;
     }
 
-    private List<Link> getLinks(ElementId src, ElementId dst) {
-        Set<Path> paths = pathService.getPaths(src, dst);
-        Iterator<Path> paths_iter = paths.iterator();
-        List<Link> links = paths_iter.next().links();
-
-        return links;
-    }
-
-    private PointToPointIntent buildP2PIntent(Ethernet ethPacket, Key key, List<Link> links, FilteredConnectPoint ingress, FilteredConnectPoint egress) {
+    private PointToPointIntent buildP2PIntent(Ethernet ethPacket, Key key, FilteredConnectPoint ingress, FilteredConnectPoint egress, int flag) {
         TrafficSelector.Builder selector_builder = DefaultTrafficSelector.builder();
+        TrafficTreatment.Builder treatment_builder = DefaultTrafficTreatment.builder();
         PointToPointIntent.Builder p2p_intent_builder = PointToPointIntent.builder();
 
         // Set up selector
@@ -221,17 +216,22 @@ public class AppComponent {
         selector_builder.matchEthDst(ethPacket.getDestinationMAC());
         selector_builder.matchEthType(Ethernet.TYPE_IPV4);
         selector_builder.matchIPProtocol(IPv4.PROTOCOL_UDP);
-        selector_builder.matchUdpSrc(TpPort.tpPort(UDP.DHCP_SERVER_PORT));
-        selector_builder.matchUdpDst(TpPort.tpPort(UDP.DHCP_CLIENT_PORT));
+
+        if (flag == S2C) {
+            selector_builder.matchUdpSrc(TpPort.tpPort(UDP.DHCP_SERVER_PORT));
+            selector_builder.matchUdpDst(TpPort.tpPort(UDP.DHCP_CLIENT_PORT));
+        } else {
+            selector_builder.matchUdpSrc(TpPort.tpPort(UDP.DHCP_CLIENT_PORT));
+            selector_builder.matchUdpDst(TpPort.tpPort(UDP.DHCP_SERVER_PORT));
+        }
 
         // Set up P2P intent
         p2p_intent_builder.appId(appId);
         p2p_intent_builder.key(key);
-        p2p_intent_builder.suggestedPath(links);
         p2p_intent_builder.filteredIngressPoint(ingress);
         p2p_intent_builder.filteredEgressPoint(egress);
         p2p_intent_builder.selector(selector_builder.build());
-        p2p_intent_builder.treatment(DefaultTrafficTreatment.emptyTreatment());
+        p2p_intent_builder.treatment(treatment_builder.build());
         p2p_intent_builder.priority(50000);
         
         return p2p_intent_builder.build();
@@ -260,8 +260,6 @@ public class AppComponent {
             Ethernet ethPacket = pkt.parsed();
             ConnectPoint src_cp = pkt.receivedFrom();
 
-            PortNumber output_port = null;
-
             if (ethPacket.getEtherType() == Ethernet.TYPE_ARP) {
                 flood(context);
                 return;
@@ -271,33 +269,15 @@ public class AppComponent {
                 /* Client to Server */
                 Key key = getKey(ethPacket.getSourceMAC(), ethPacket.getDestinationMAC());
                 PointToPointIntent p2p_intent = (PointToPointIntent) intentService.getIntent(key);
-                List<Link> links = null;
 
                 if (p2p_intent == null) {
                     /* No intent, Create an intent and sumbit it */
                     FilteredConnectPoint ingree_point = new FilteredConnectPoint(src_cp);
                     FilteredConnectPoint egress_point = new FilteredConnectPoint(dhcp_server_cp);
 
-                    if (src_cp.deviceId().toString().compareTo(dhcp_server_cp.deviceId().toString()) != 0) {
-                        links = getLinks(src_cp.deviceId(), dhcp_server_cp.deviceId());
-                        output_port = links.get(0).src().port();
-                    } else {
-                        output_port = dhcp_server_cp.port();
-                    }
-
-                    p2p_intent = buildP2PIntent(ethPacket, key, links, ingree_point, egress_point);
+                    p2p_intent = buildP2PIntent(ethPacket, key, ingree_point, egress_point, C2S);
                     submitIntent(p2p_intent);
-                } else {
-                    /* Intent is already exist */
-                    FilteredConnectPoint egress_point = p2p_intent.filteredEgressPoint();
-
-                    if (src_cp.deviceId().toString().compareTo(egress_point.connectPoint().deviceId().toString()) != 0) {
-                        links = getLinks(src_cp.deviceId(), dhcp_server_cp.deviceId());
-                        output_port = links.get(0).src().port();
-                    } else {
-                        output_port = egress_point.connectPoint().port();
-                    }
-                }
+                } 
             } else {
                 /* Server to Client */
                 HostId dst_hostID = HostId.hostId(ethPacket.getDestinationMAC());
@@ -307,35 +287,16 @@ public class AppComponent {
                 Key key = getKey(ethPacket.getSourceMAC(), ethPacket.getDestinationMAC());
                 PointToPointIntent p2p_intent = (PointToPointIntent) intentService.getIntent(key);
                 
-                List<Link> links = null;
-
                 if (p2p_intent == null) {
                     FilteredConnectPoint ingree_point = new FilteredConnectPoint(src_cp);
                     FilteredConnectPoint egress_point = new FilteredConnectPoint(dst_cp);
 
-                    if (src_cp.deviceId().toString().compareTo(dst_cp.deviceId().toString()) != 0) {
-                        links = getLinks(src_cp.deviceId(), dst_cp.deviceId());
-                        output_port = links.get(0).src().port();
-                    } else {
-                        output_port = dst_cp.port();
-                    }
-
-                    p2p_intent = buildP2PIntent(ethPacket, key, links, ingree_point, egress_point);
+                    p2p_intent = buildP2PIntent(ethPacket, key, ingree_point, egress_point, S2C);
                     submitIntent(p2p_intent);
-                } else {
-                    /* Intent is already exist */
-                    FilteredConnectPoint egress_point = p2p_intent.filteredEgressPoint();
-                    
-                    if (src_cp.deviceId().toString().compareTo(egress_point.connectPoint().deviceId().toString()) != 0) {
-                        links = getLinks(src_cp.deviceId(), dst_cp.deviceId());
-                        output_port = links.get(0).src().port();
-                    } else {
-                        output_port = egress_point.connectPoint().port();
-                    }
-                }
+                } 
             }
             
-            packetout(context, output_port);
+            // packetout(context, output_port);
         }   
     }
 
