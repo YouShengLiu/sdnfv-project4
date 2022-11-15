@@ -223,8 +223,15 @@ public class AppComponent {
         PointToPointIntent.Builder p2p_intent_builder = PointToPointIntent.builder();
 
         // Set up selector
-        selector_builder.matchEthSrc(ethPacket.getSourceMAC());
-        selector_builder.matchEthDst(ethPacket.getDestinationMAC());
+        // selector_builder.matchEthSrc(ethPacket.getSourceMAC());
+        // selector_builder.matchEthDst(ethPacket.getDestinationMAC());
+
+        if (flag == C2S) {
+            selector_builder.matchEthSrc(ethPacket.getSourceMAC());
+        } else {
+            selector_builder.matchEthDst(ethPacket.getSourceMAC());
+        }
+
         selector_builder.matchEthType(Ethernet.TYPE_IPV4);
         selector_builder.matchIPProtocol(IPv4.PROTOCOL_UDP);
 
@@ -276,38 +283,27 @@ public class AppComponent {
                 return;
             }
 
-            if (ethPacket.isBroadcast()) {
-                /* Client to Server */
-                Key key = getKey(ethPacket.getSourceMAC(), ethPacket.getDestinationMAC());
-                PointToPointIntent p2p_intent = (PointToPointIntent) intentService.getIntent(key);
+            Key key = Key.of(ethPacket.getSourceMAC().toString() + Integer.toString(C2S), appId);
+            PointToPointIntent p2p_intent = (PointToPointIntent) intentService.getIntent(key);
+            if (p2p_intent == null) {
+                /* No intent, Create an intent and sumbit it */
+                FilteredConnectPoint ingree_point = new FilteredConnectPoint(src_cp);
+                FilteredConnectPoint egress_point = new FilteredConnectPoint(dhcp_server_cp);
 
-                if (p2p_intent == null) {
-                    /* No intent, Create an intent and sumbit it */
-                    FilteredConnectPoint ingree_point = new FilteredConnectPoint(src_cp);
-                    FilteredConnectPoint egress_point = new FilteredConnectPoint(dhcp_server_cp);
+                p2p_intent = buildP2PIntent(ethPacket, key, ingree_point, egress_point, C2S);
+                submitIntent(p2p_intent);
+            } 
 
-                    p2p_intent = buildP2PIntent(ethPacket, key, ingree_point, egress_point, C2S);
-                    submitIntent(p2p_intent);
-                } 
-            } else {
-                /* Server to Client */
-                HostId dst_hostID = HostId.hostId(ethPacket.getDestinationMAC());
-                Host dst_host = hostService.getHost(dst_hostID);
-                ConnectPoint dst_cp = new ConnectPoint(dst_host.location().elementId(), dst_host.location().port()); 
+            key = Key.of(ethPacket.getSourceMAC().toString() + Integer.toString(S2C), appId);
+            p2p_intent = (PointToPointIntent) intentService.getIntent(key);
+            if (p2p_intent == null) {
+                /* No intent, Create an intent and sumbit it */
+                FilteredConnectPoint ingree_point = new FilteredConnectPoint(dhcp_server_cp);
+                FilteredConnectPoint egress_point = new FilteredConnectPoint(src_cp);
 
-                Key key = getKey(ethPacket.getSourceMAC(), ethPacket.getDestinationMAC());
-                PointToPointIntent p2p_intent = (PointToPointIntent) intentService.getIntent(key);
-                
-                if (p2p_intent == null) {
-                    FilteredConnectPoint ingree_point = new FilteredConnectPoint(src_cp);
-                    FilteredConnectPoint egress_point = new FilteredConnectPoint(dst_cp);
-
-                    p2p_intent = buildP2PIntent(ethPacket, key, ingree_point, egress_point, S2C);
-                    submitIntent(p2p_intent);
-                } 
-            }
-            
-            // packetout(context, output_port);
+                p2p_intent = buildP2PIntent(ethPacket, key, ingree_point, egress_point, S2C);
+                submitIntent(p2p_intent);
+            } 
         }   
     }
 
