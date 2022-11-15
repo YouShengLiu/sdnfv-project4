@@ -7,7 +7,7 @@ public class DhcpConfig extends Config<ApplicationId> {
 
     @Override
     public boolean isValid() {
-      return hasOnlyFields(DhcpServerLocation);
+      return hasFields(DhcpServerLocation);
     }
     
     public String getServerLocation() {
