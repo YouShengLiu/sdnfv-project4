@@ -223,9 +223,6 @@ public class AppComponent {
         PointToPointIntent.Builder p2p_intent_builder = PointToPointIntent.builder();
 
         // Set up selector
-        // selector_builder.matchEthSrc(ethPacket.getSourceMAC());
-        // selector_builder.matchEthDst(ethPacket.getDestinationMAC());
-
         selector_builder.matchEthType(Ethernet.TYPE_IPV4);
         selector_builder.matchIPProtocol(IPv4.PROTOCOL_UDP);
 
